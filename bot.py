@@ -1,128 +1,128 @@
 import asyncio
-from aiogram import Bot, Dispatcher, types
-from aiogram.filters import CommandStart
-from aiogram.types import ChatPermissions
+from aiogram import Bot, Dispatcher, F
+from aiogram.types import Message
+from aiogram.filters import Command
+from aiogram.enums import ChatMemberStatus
+from aiogram.exceptions import TelegramBadRequest
 
 TOKEN = "8436865710:AAE7y8-xJThk-MlkrfNaJt_EazxCJJn6KGw"
-OWNER_ID = 8286170020  # твой Telegram ID
 
-bot = Bot(token=TOKEN)
+OWNER_ID = 8286170020  # 👑 ВЛАДЕЛЕЦ
+
+# admin_id: level
+ADMINS = {
+    OWNER_ID: 999
+}
+
+bot = Bot(TOKEN)
 dp = Dispatcher()
 
 
-async def is_admin(chat_id, user_id):
-    member = await bot.get_chat_member(chat_id, user_id)
-    return member.status in ("administrator", "creator")
+# ---------- HELPERS ----------
+
+def is_owner(user_id: int) -> bool:
+    return user_id == OWNER_ID
 
 
-@dp.message(CommandStart())
-async def start(m: types.Message):
-    await m.reply("🤖 Бот запущен и работает")
+def is_admin(user_id: int) -> bool:
+    return user_id in ADMINS
 
 
-@dp.message()
-async def handler(m: types.Message):
-    if not m.text:
+def admin_level(user_id: int) -> int:
+    return ADMINS.get(user_id, 0)
+
+
+async def get_chat_admin_ids(chat_id: int) -> set[int]:
+    admins = await bot.get_chat_administrators(chat_id)
+    return {a.user.id for a in admins}
+
+
+# ---------- COMMANDS ----------
+
+@dp.message(Command("start"))
+async def start(m: Message):
+    await m.reply("✅ Бот онлайн")
+
+
+# ➕ +админ <level> (reply)
+@dp.message(F.text.startswith("+админ"))
+async def add_admin(m: Message):
+    if not is_owner(m.from_user.id):
         return
 
-    text = m.text.lower().strip()
+    if not m.reply_to_message:
+        return await m.reply("Ответь на сообщение пользователя")
 
-    # 📌 ПРАВИЛА — ДОСТУПНО ВСЕМ
-    if text == "!правила":
-        await m.reply(
-            "📌 ПРАВИЛА ГРУППЫ\n"
-            "1️⃣ Без спама\n"
-            "2️⃣ Без оскорблений\n"
-            "3️⃣ Без флуда\n"
-            "4️⃣ Слушать админов\n\n"
-            "❗ Нарушение = мут / кик / бан"
-        )
+    try:
+        level = int(m.text.split()[1])
+    except:
+        return await m.reply("Формат: +админ <level>")
+
+    target = m.reply_to_message.from_user
+    ADMINS[target.id] = level
+
+    await m.reply(f"✅ {target.full_name} теперь админ уровня {level}")
+
+
+# ➖ -админ (reply)
+@dp.message(F.text == "-админ")
+async def remove_admin(m: Message):
+    if not is_owner(m.from_user.id):
         return
 
-    # 👮 СПИСОК АДМИНОВ
-    if text in ("!админы", "админы"):
-        admins = await bot.get_chat_administrators(m.chat.id)
-        msg = "👮 Администраторы группы:\n"
-        for admin in admins:
-            user = admin.user
-            if user.username:
-                msg += f"• {user.first_name} (@{user.username})\n"
-            else:
-                msg += f"• {user.first_name}\n"
-        await m.reply(msg)
-        return
-
-    # дальше — ТОЛЬКО ответом на сообщение
     if not m.reply_to_message:
         return
 
-    # проверка админа
-    if not await is_admin(m.chat.id, m.from_user.id):
+    target = m.reply_to_message.from_user
+    if target.id == OWNER_ID:
+        return await m.reply("Нельзя удалить owner")
+
+    ADMINS.pop(target.id, None)
+    await m.reply("❌ Админ удалён")
+
+
+# 👢 /kick (reply)
+@dp.message(Command("kick"))
+async def kick(m: Message):
+    if not m.reply_to_message:
         return
 
+    sender = m.from_user
     target = m.reply_to_message.from_user
 
-    # если пользователь уже вышел
-    member = await bot.get_chat_member(m.chat.id, target.id)
-    if member.status == "left":
-        await m.reply("❌ Пользователь уже покинул чат")
+    if not is_admin(sender.id):
         return
 
-    # 🔨 КИК
-    if text in ("!кик", "кик"):
-        await bot.kick_chat_member(m.chat.id, target.id)
-        await m.reply(f"👢 {target.first_name} кикнут")
+    if is_admin(target.id):
+        return await m.reply("❌ Нельзя кикнуть админа")
 
-    # ⛔ БАН
-    elif text in ("!бан", "бан"):
+    chat_admins = await get_chat_admin_ids(m.chat.id)
+    if target.id in chat_admins:
+        return await m.reply("❌ Сначала убери админку в Telegram")
+
+    try:
         await bot.ban_chat_member(m.chat.id, target.id)
-        await m.reply(f"⛔ {target.first_name} забанен")
+        await bot.unban_chat_member(m.chat.id, target.id)
+        await m.reply("👢 Пользователь кикнут")
+    except TelegramBadRequest as e:
+        await m.reply(f"Ошибка: {e.message}")
 
-    # 🔇 МУТ
-    elif text in ("!мут", "мут"):
-        await bot.restrict_chat_member(
-            m.chat.id,
-            target.id,
-            ChatPermissions(can_send_messages=False)
-        )
-        await m.reply(f"🔇 {target.first_name} замучен")
 
-    # 🔊 РАЗМУТ
-    elif text in ("!размут", "размут"):
-        await bot.restrict_chat_member(
-            m.chat.id,
-            target.id,
-            ChatPermissions(can_send_messages=True)
-        )
-        await m.reply(f"🔊 {target.first_name} размучен")
+# 📩 если админа кикнули
+@dp.message(F.new_chat_members)
+async def admin_kicked_notice(m: Message):
+    for user in m.new_chat_members:
+        if is_admin(user.id):
+            await bot.send_message(
+                OWNER_ID,
+                f"⚠️ Админа {user.full_name} добавили обратно в чат"
+            )
 
-    # 👑 ВЫДАТЬ АДМИНА
-    elif text in ("+админ", "повысить"):
-        await bot.promote_chat_member(
-            m.chat.id,
-            target.id,
-            can_delete_messages=True,
-            can_restrict_members=True,
-            can_invite_users=True
-        )
-        await m.reply(f"👑 {target.first_name} повышен до админа")
 
-    # ⬇️ СНЯТЬ АДМИНА
-    elif text in ("-админ", "разжаловать"):
-        await bot.promote_chat_member(
-            m.chat.id,
-            target.id,
-            can_delete_messages=False,
-            can_restrict_members=False,
-            can_invite_users=False
-        )
-        await m.reply(f"⬇️ {target.first_name} разжалован")
-
+# ---------- START ----------
 
 async def main():
     await dp.start_polling(bot)
 
-
 if __name__ == "__main__":
     asyncio.run(main())
-
