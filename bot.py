@@ -7,7 +7,7 @@ from aiogram.filters import Command
 from aiogram.enums import ChatMemberStatus
 from aiogram.exceptions import TelegramBadRequest
 
-TOKEN = "PASTE_BOT_TOKEN_HERE"
+TOKEN = "8436865710:AAE7y8-xJThk-MlkrfNaJt_EazxCJJn6KGw"
 
 OWNER_ID = 8286170020  # ТВОЙ ID
 
@@ -202,3 +202,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
