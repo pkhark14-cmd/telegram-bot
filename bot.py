@@ -5,20 +5,20 @@ from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-# ====== ENV ======
-TOKEN = os.getenv("Token")  # берём из Railway
-OWNER_ID = 8286170020       # твой Telegram ID
+# ====== НАСТРОЙКИ ======
+TOKEN = os.getenv("BOT_TOKEN")
+OWNER_ID = 8286170020  # твой Telegram ID
 
 if not TOKEN:
-    raise RuntimeError("TOKEN не найден в переменных окружения")
+    raise RuntimeError("BOT_TOKEN не найден в переменных окружения")
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# -------------------------
-# Хранилище админов
-# уровни: 3 — владелец, 2 — админ, 1 — мод
-# -------------------------
+# ====== АДМИНЫ ======
+# 3 — овнер
+# 2 — старший админ
+# 1 — админ
 ADMINS = {
     OWNER_ID: 3
 }
@@ -26,9 +26,7 @@ ADMINS = {
 def get_level(user_id: int) -> int:
     return ADMINS.get(user_id, 0)
 
-# -------------------------
-# /addadmin <id> <level>
-# -------------------------
+# ====== /addadmin ======
 @dp.message(Command("addadmin"))
 async def add_admin(message: types.Message):
     if get_level(message.from_user.id) < 3:
@@ -49,37 +47,37 @@ async def add_admin(message: types.Message):
     ADMINS[uid] = lvl
     await message.answer(f"✅ Админ {uid} добавлен (уровень {lvl})")
 
-# -------------------------
-# /kick (ответом)
-# -------------------------
+# ====== /kick ======
 @dp.message(Command("kick"))
 async def kick_request(message: types.Message):
     if not message.reply_to_message:
-        await message.answer("Нужно ответить на сообщение пользователя")
-        return
+        return await message.answer("Ответь на сообщение пользователя")
 
-    if get_level(message.from_user.id) == 0:
+    sender_lvl = get_level(message.from_user.id)
+    if sender_lvl == 0:
         return
 
     target = message.reply_to_message.from_user
 
-    # владелец — кик сразу
+    # овнер — сразу кик
     if message.from_user.id == OWNER_ID:
         await bot.ban_chat_member(message.chat.id, target.id)
         await message.answer("👢 Пользователь кикнут")
         return
 
-    # запрос владельцу
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(
-            text="✅ Разрешить",
-            callback_data=f"kick_yes:{message.chat.id}:{target.id}"
-        ),
-        InlineKeyboardButton(
-            text="❌ Запретить",
-            callback_data="kick_no"
-        )
-    ]])
+    # запрос овнеру
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="✅ Разрешить",
+                callback_data=f"kick_yes:{message.chat.id}:{target.id}"
+            ),
+            InlineKeyboardButton(
+                text="❌ Запретить",
+                callback_data="kick_no"
+            )
+        ]
+    ])
 
     await bot.send_message(
         OWNER_ID,
@@ -92,9 +90,7 @@ async def kick_request(message: types.Message):
 
     await message.answer("⏳ Запрос отправлен владельцу")
 
-# -------------------------
-# Callback
-# -------------------------
+# ====== CALLBACK ======
 @dp.callback_query(F.data.startswith("kick_yes"))
 async def kick_yes(call: types.CallbackQuery):
     if call.from_user.id != OWNER_ID:
@@ -108,15 +104,12 @@ async def kick_yes(call: types.CallbackQuery):
 async def kick_no(call: types.CallbackQuery):
     if call.from_user.id != OWNER_ID:
         return
-    await call.message.edit_text("❌ Кик отклонён")
 
-# -------------------------
-# Запуск
-# -------------------------
+    await call.message.edit_text("❌ Кик отменён")
+
+# ====== ЗАПУСК ======
 async def main():
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-
