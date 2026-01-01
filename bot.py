@@ -1,126 +1,202 @@
 import asyncio
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message
+from aiogram.types import (
+    Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+)
 from aiogram.filters import Command
 from aiogram.enums import ChatMemberStatus
 from aiogram.exceptions import TelegramBadRequest
 
-TOKEN = "8436865710:AAE7y8-xJThk-MlkrfNaJt_EazxCJJn6KGw"
+TOKEN = "PASTE_BOT_TOKEN_HERE"
 
-OWNER_ID = 8286170020  # 👑 ВЛАДЕЛЕЦ
+OWNER_ID = 8286170020  # ТВОЙ ID
 
-# admin_id: level
-ADMINS = {
-    OWNER_ID: 999
+# уровни админов
+LEVEL_MOD = 1
+LEVEL_ADMIN = 2
+LEVEL_SENIOR = 3
+LEVEL_OWNER = 4
+
+# временное хранилище (для старта, потом можно БД)
+admins = {
+    OWNER_ID: LEVEL_OWNER
 }
+
+pending_actions = {}  # action_id -> data
 
 bot = Bot(TOKEN)
 dp = Dispatcher()
 
 
-# ---------- HELPERS ----------
-
-def is_owner(user_id: int) -> bool:
-    return user_id == OWNER_ID
+def get_level(user_id: int) -> int:
+    return admins.get(user_id, 0)
 
 
 def is_admin(user_id: int) -> bool:
-    return user_id in ADMINS
+    return get_level(user_id) > 0
 
 
-def admin_level(user_id: int) -> int:
-    return ADMINS.get(user_id, 0)
-
-
-async def get_chat_admin_ids(chat_id: int) -> set[int]:
-    admins = await bot.get_chat_administrators(chat_id)
-    return {a.user.id for a in admins}
-
-
-# ---------- COMMANDS ----------
-
-@dp.message(Command("start"))
-async def start(m: Message):
-    await m.reply("✅ Бот онлайн")
-
-
-# ➕ +админ <level> (reply)
-@dp.message(F.text.startswith("+админ"))
-async def add_admin(m: Message):
-    if not is_owner(m.from_user.id):
-        return
-
-    if not m.reply_to_message:
-        return await m.reply("Ответь на сообщение пользователя")
-
+async def is_chat_admin(chat_id: int, user_id: int) -> bool:
     try:
-        level = int(m.text.split()[1])
+        member = await bot.get_chat_member(chat_id, user_id)
+        return member.status in (
+            ChatMemberStatus.ADMINISTRATOR,
+            ChatMemberStatus.OWNER
+        )
     except:
-        return await m.reply("Формат: +админ <level>")
-
-    target = m.reply_to_message.from_user
-    ADMINS[target.id] = level
-
-    await m.reply(f"✅ {target.full_name} теперь админ уровня {level}")
+        return False
 
 
-# ➖ -админ (reply)
-@dp.message(F.text == "-админ")
-async def remove_admin(m: Message):
-    if not is_owner(m.from_user.id):
+# ===== ДОБАВЛЕНИЕ АДМИНОВ =====
+@dp.message(Command("addadmin"))
+async def add_admin(message: Message):
+    if message.from_user.id != OWNER_ID:
         return
 
-    if not m.reply_to_message:
+    if not message.reply_to_message:
+        await message.reply("Ответь на сообщение пользователя")
         return
 
-    target = m.reply_to_message.from_user
-    if target.id == OWNER_ID:
-        return await m.reply("Нельзя удалить owner")
+    level = int(message.text.split()[1])
+    target_id = message.reply_to_message.from_user.id
 
-    ADMINS.pop(target.id, None)
-    await m.reply("❌ Админ удалён")
+    admins[target_id] = level
+    await message.reply(f"✅ Админ добавлен. Уровень: {level}")
 
 
-# 👢 /kick (reply)
+# ===== КИК =====
 @dp.message(Command("kick"))
-async def kick(m: Message):
-    if not m.reply_to_message:
+async def kick_user(message: Message):
+    if not message.reply_to_message:
         return
 
-    sender = m.from_user
-    target = m.reply_to_message.from_user
+    actor = message.from_user.id
+    target = message.reply_to_message.from_user.id
+    chat_id = message.chat.id
 
-    if not is_admin(sender.id):
+    if not is_admin(actor):
         return
 
-    if is_admin(target.id):
-        return await m.reply("❌ Нельзя кикнуть админа")
+    if await is_chat_admin(chat_id, target):
+        await message.reply("❌ Нельзя кикать администратора")
+        return
 
-    chat_admins = await get_chat_admin_ids(m.chat.id)
-    if target.id in chat_admins:
-        return await m.reply("❌ Сначала убери админку в Telegram")
+    # овнер кикает сразу
+    if actor == OWNER_ID:
+        await bot.ban_chat_member(chat_id, target)
+        await bot.unban_chat_member(chat_id, target)
+        await message.reply("✅ Пользователь кикнут")
+        return
 
-    try:
-        await bot.ban_chat_member(m.chat.id, target.id)
-        await bot.unban_chat_member(m.chat.id, target.id)
-        await m.reply("👢 Пользователь кикнут")
-    except TelegramBadRequest as e:
-        await m.reply(f"Ошибка: {e.message}")
+    # запрос овнеру
+    action_id = f"kick:{chat_id}:{target}"
+    pending_actions[action_id] = {
+        "chat_id": chat_id,
+        "target": target
+    }
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Разрешить", callback_data=f"approve:{action_id}"),
+            InlineKeyboardButton(text="❌ Запретить", callback_data=f"deny:{action_id}")
+        ]
+    ])
+
+    await bot.send_message(
+        OWNER_ID,
+        f"⚠️ Запрос на КИК\n"
+        f"От: {actor}\n"
+        f"Кого: {target}",
+        reply_markup=kb
+    )
+
+    await message.reply("⏳ Запрос отправлен владельцу")
 
 
-# 📩 если админа кикнули
-@dp.message(F.new_chat_members)
-async def admin_kicked_notice(m: Message):
-    for user in m.new_chat_members:
-        if is_admin(user.id):
-            await bot.send_message(
-                OWNER_ID,
-                f"⚠️ Админа {user.full_name} добавили обратно в чат"
-            )
+# ===== БАН =====
+@dp.message(Command("ban"))
+async def ban_user(message: Message):
+    if not message.reply_to_message:
+        return
+
+    actor = message.from_user.id
+    target = message.reply_to_message.from_user.id
+    chat_id = message.chat.id
+
+    if not is_admin(actor):
+        return
+
+    if await is_chat_admin(chat_id, target):
+        await message.reply("❌ Нельзя банить администратора")
+        return
+
+    if actor == OWNER_ID:
+        await bot.ban_chat_member(chat_id, target)
+        await message.reply("✅ Пользователь забанен")
+        return
+
+    action_id = f"ban:{chat_id}:{target}"
+    pending_actions[action_id] = {
+        "chat_id": chat_id,
+        "target": target
+    }
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Разрешить", callback_data=f"approve:{action_id}"),
+            InlineKeyboardButton(text="❌ Запретить", callback_data=f"deny:{action_id}")
+        ]
+    ])
+
+    await bot.send_message(
+        OWNER_ID,
+        f"⚠️ Запрос на БАН\n"
+        f"От: {actor}\n"
+        f"Кого: {target}",
+        reply_markup=kb
+    )
+
+    await message.reply("⏳ Запрос отправлен владельцу")
 
 
-# ---------- START ----------
+# ===== CALLBACK =====
+@dp.callback_query(F.data.startswith("approve"))
+async def approve(cb: CallbackQuery):
+    if cb.from_user.id != OWNER_ID:
+        return
 
+    action_id = cb.data.split("approve:")[1]
+    data = pending_actions.pop(action_id, None)
+
+    if not data:
+        await cb.answer("❌ Уже обработано")
+        return
+
+    chat_id = data["chat_id"]
+    target = data["target"]
+
+    if action_id.startswith("kick"):
+        await bot.ban_chat_member(chat_id, target)
+        await bot.unban_chat_member(chat_id, target)
+        text = "✅ Кик подтверждён"
+    else:
+        await bot.ban_chat_member(chat_id, target)
+        text = "✅ Бан подтверждён"
+
+    await cb.message.edit_text(text)
+
+
+@dp.callback_query(F.data.startswith("deny"))
+async def deny(cb: CallbackQuery):
+    if cb.from_user.id != OWNER_ID:
+        return
+
+    action_id = cb.data.split("deny:")[1]
+    pending_actions.pop(action_id, None)
+    await cb.message.edit_text("❌ Действие отклонено")
+
+
+# ===== ЗАПУСК =====
 async def main():
     await dp.start_polling(bot)
 
