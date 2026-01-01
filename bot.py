@@ -4,7 +4,7 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.enums import ChatMemberStatus
 
-TOKEN = "8436865710:AAHC6PcPOiSd4JamyL09QaeYRh4vUkElNwQ"
+TOKEN = "Token"
 OWNER_ID = 8286170020  # твой айди (овнер)
 
 bot = Bot(TOKEN)
@@ -111,3 +111,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
